@@ -450,7 +450,13 @@ tr:hover td{background:#ffffff05}
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// ── Supabase ──────────────────────────────────────────────────
+const SUPABASE_URL = 'https://cusdgbutarctttkhyrvr.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1c2RnYnV0YXJjdHR0a2h5cnZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyNDI2NzUsImV4cCI6MjA5MzgxODY3NX0.VrUA35neuehjxqour_IB4lgza0HfM70bRiXpavceJUU';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const DB={log:[],pickErrors:[],shipErrors:[],shipCosts:[],damaged:[],sysShip:[]};
 let EMPLOYEES=['Francisco','Nicholas','Fallon','Ubaldo','Jimmie','Armando','Gilbert','Delphino','Alejandro','Mason','Easton'];
 let CARRIERS=['UPS','FedEx','USPS','LTL Freight','Will Call','Other'];
@@ -586,14 +592,47 @@ function autoLookupTeam(soInputId, panelId, activityType, label){
   </div>`;
 }
 
+// ── Supabase load/save ────────────────────────────────────────
+async function loadAllData(){
+  showToast('Loading data...','');
+  try{
+    const [log,pe,se,sc,dp,ss]=await Promise.all([
+      sb.from('wh_log').select('*').order('id',{ascending:true}),
+      sb.from('wh_pick_errors').select('*').order('id',{ascending:true}),
+      sb.from('wh_ship_errors').select('*').order('id',{ascending:true}),
+      sb.from('wh_ship_costs').select('*').order('id',{ascending:true}),
+      sb.from('wh_damaged').select('*').order('id',{ascending:true}),
+      sb.from('wh_sys_ship').select('*').order('id',{ascending:true}),
+    ]);
+    const err=log.error||pe.error||se.error||sc.error||dp.error||ss.error;
+    if(err){showToast('DB error: '+err.message,'red');console.error(err);return;}
+    DB.log=(log.data||[]).map(r=>({...r,emps:r.emps||[],splitFrom:r.split_from||null}));
+    DB.pickErrors=(pe.data||[]).map(r=>({...r,pickers:r.pickers||[]}));
+    DB.shipErrors=(se.data||[]).map(r=>({...r,shippers:r.shippers||[],resolvedAmount:r.resolved_amount||0}));
+    DB.shipCosts=(sc.data||[]).map(r=>({...r,cost:r.cost||0,rec:r.rec||0}));
+    DB.damaged=dp.data||[];
+    DB.sysShip=ss.data||[];
+    renderLogTable();renderOpenEntries();renderTodaySummary();
+    renderPeTable();renderPickerStats();
+    renderSeTable();renderDamageSummary();
+    renderScTable();renderCostSummary();
+    renderDpTable();renderDpSummary();
+    renderSsTable();renderSsSummary();
+    showToast('Data loaded.','green');
+  }catch(e){showToast('Load failed: '+e.message,'red');console.error(e);}
+}
+
 // ── Daily Log ─────────────────────────────────────────────────
-function saveLogEntry(){
+async function saveLogEntry(){
   const emps=getCheckedEmps('log-emp-box'),type=document.getElementById('log-type').value,date=document.getElementById('log-date').value;
   if(!emps.length||!type||!date){showToast('Date, at least one Employee, and Activity Type are required.');return;}
   const start=document.getElementById('log-start').value,end=document.getElementById('log-end').value,now=getNow();
   if(start&&date===now.date&&start>now.hhmm){showToast('Start time cannot be in the future.');document.getElementById('log-start').value=now.hhmm;return;}
   if(end&&start&&end<start){showToast('End time cannot be before start time.');return;}
-  DB.log.push({id:Date.now(),date,emps,type,sono:document.getElementById('log-sono').value.trim()||'—',start,end,notes:document.getElementById('log-notes').value,status:end?'Complete':'Open',splitFrom:null});
+  const row={date,emps,type,sono:document.getElementById('log-sono').value.trim()||'—',start:start||null,end:end||null,notes:document.getElementById('log-notes').value,status:end?'Complete':'Open',split_from:null};
+  const {data,error}=await sb.from('wh_log').insert([row]).select();
+  if(error){showToast('Save failed: '+error.message,'red');console.error(error);return;}
+  DB.log.push({...data[0],emps:data[0].emps||[],splitFrom:null});
   renderLogTable();renderOpenEntries();renderTodaySummary();
   buildEmpCheckboxes('log-emp-box');
   ['log-type','log-sono','log-start','log-end','log-notes'].forEach(id=>document.getElementById(id).value='');
@@ -637,6 +676,7 @@ function confirmGroupFinish(){
   if(e.date===now.date&&t>now.hhmm){showToast('End time cannot be in the future.');return;}
   if(e.start&&t<e.start){showToast('End time cannot be before start ('+e.start+').');return;}
   e.end=t;e.status='Complete';finishingId=null;finishMode=null;
+  sb.from('wh_log').update({end:t,status:'Complete'}).eq('id',e.id).then(({error})=>{if(error)console.error('finish update:',error);});
   document.getElementById('finish-panel').style.display='none';
   renderLogTable();renderOpenEntries();renderTodaySummary();showToast('Finished for '+e.emps.join(', ')+'.','green');
 }
@@ -649,8 +689,17 @@ function confirmIndividualFinish(){
   const finishing=[...document.querySelectorAll('[id^="fi_"]:checked')].map(c=>c.value);
   const remaining=e.emps.filter(emp=>!finishing.includes(emp));
   if(!finishing.length){showToast('Select at least one employee.');return;}
-  DB.log.push({id:Date.now(),date:e.date,emps:finishing,type:e.type,sono:e.sono,start:e.start,end:t,notes:e.notes,status:'Complete',splitFrom:e.id});
-  if(remaining.length>0)e.emps=remaining;else{e.end=t;e.status='Complete';}
+  const newRow={date:e.date,emps:finishing,type:e.type,sono:e.sono,start:e.start,end:t,notes:e.notes,status:'Complete',split_from:e.id};
+  const {data:nd,error:ne}=await sb.from('wh_log').insert([newRow]).select();
+  if(ne){showToast('Save failed: '+ne.message,'red');console.error(ne);return;}
+  DB.log.push({...nd[0],emps:nd[0].emps||[],splitFrom:e.id});
+  if(remaining.length>0){
+    e.emps=remaining;
+    sb.from('wh_log').update({emps:remaining}).eq('id',e.id).then(({error})=>{if(error)console.error('split update:',error);});
+  }else{
+    e.end=t;e.status='Complete';
+    sb.from('wh_log').update({end:t,status:'Complete'}).eq('id',e.id).then(({error})=>{if(error)console.error('split finish:',error);});
+  }
   finishingId=null;finishMode=null;
   document.getElementById('finish-panel').style.display='none';
   renderLogTable();renderOpenEntries();renderTodaySummary();showToast(finishing.join(', ')+' marked complete.'+(remaining.length?' '+remaining.join(', ')+' still open.':''),'green');
@@ -682,7 +731,10 @@ function addPickError(){
   if(!so||!type){showToast('SO # and Error Type required.');return;}
   const matches=DB.log.filter(e=>e.type==='Picking'&&e.sono===so);
   const ps=new Set();matches.forEach(m=>m.emps.forEach(emp=>ps.add(emp)));
-  DB.pickErrors.push({id:Date.now(),date:document.getElementById('pe-date').value,so,pickers:[...ps],type,notes:document.getElementById('pe-notes').value});
+  const peRow={date:document.getElementById('pe-date').value,so,pickers:[...ps],type,notes:document.getElementById('pe-notes').value};
+  const {data:pd,error:pe2}=await sb.from('wh_pick_errors').insert([peRow]).select();
+  if(pe2){showToast('Save failed: '+pe2.message,'red');console.error(pe2);return;}
+  DB.pickErrors.push({...pd[0],pickers:pd[0].pickers||[]});
   renderPeTable();renderPickerStats();
   ['pe-so','pe-notes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('pe-type').value='';
@@ -714,18 +766,10 @@ function addShipError(){
   // Lookup shippers from log — same pattern as pickers
   const matches=DB.log.filter(e=>e.type==='Shipping'&&e.sono===so);
   const ss=new Set();matches.forEach(m=>m.emps.forEach(emp=>ss.add(emp)));
-  DB.shipErrors.push({
-    id:Date.now(),
-    date:document.getElementById('se-date').value,
-    so,
-    shippers:[...ss], // whole shipping team tagged
-    type,
-    carrier:document.getElementById('se-carrier').value,
-    value:parseFloat(document.getElementById('se-value').value)||0,
-    status:document.getElementById('se-status').value,
-    resolvedAmount:0,
-    notes:document.getElementById('se-notes').value
-  });
+  const seRow={date:document.getElementById('se-date').value,so,shippers:[...ss],type,carrier:document.getElementById('se-carrier').value,value:parseFloat(document.getElementById('se-value').value)||0,status:document.getElementById('se-status').value,resolved_amount:0,notes:document.getElementById('se-notes').value};
+  const {data:sd,error:se2}=await sb.from('wh_ship_errors').insert([seRow]).select();
+  if(se2){showToast('Save failed: '+se2.message,'red');console.error(se2);return;}
+  DB.shipErrors.push({...sd[0],shippers:sd[0].shippers||[],resolvedAmount:0});
   renderSeTable();renderDamageSummary();
   ['se-so','se-notes','se-value'].forEach(id=>document.getElementById(id).value='');['se-type','se-carrier'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('se-status').value='Open';
@@ -742,6 +786,7 @@ function openSeUpdate(id){
 function confirmSeUpdate(){
   const e=DB.shipErrors.find(x=>x.id===seUpdateId);if(!e){closeSeUpdate();return;}
   e.status=document.getElementById('se-update-status').value;e.resolvedAmount=parseFloat(document.getElementById('se-update-amount').value)||0;e.notes=document.getElementById('se-update-notes').value;
+  sb.from('wh_ship_errors').update({status:e.status,resolved_amount:e.resolvedAmount,notes:e.notes}).eq('id',e.id).then(({error})=>{if(error)console.error('se update:',error);});
   closeSeUpdate();renderSeTable();renderDamageSummary();if(mgrUnlocked)renderMgrSection('ship-err');showToast('Claim updated.','green');
 }
 function closeSeUpdate(){seUpdateId=null;document.getElementById('se-update-modal').style.display='none';}
@@ -771,7 +816,10 @@ function renderDamageSummary(){
 // ── Ship Cost ─────────────────────────────────────────────────
 function addShipCost(){
   const so=document.getElementById('sc-so').value.trim();if(!so){showToast('SO Number required.');return;}
-  DB.shipCosts.push({id:Date.now(),date:document.getElementById('sc-date').value,so,carrier:document.getElementById('sc-carrier').value,cost:parseFloat(document.getElementById('sc-cost').value)||0,rec:parseFloat(document.getElementById('sc-rec').value)||0,notes:document.getElementById('sc-notes').value});
+  const scRow={date:document.getElementById('sc-date').value,so,carrier:document.getElementById('sc-carrier').value,cost:parseFloat(document.getElementById('sc-cost').value)||0,rec:parseFloat(document.getElementById('sc-rec').value)||0,notes:document.getElementById('sc-notes').value};
+  const {data:scd,error:sce}=await sb.from('wh_ship_costs').insert([scRow]).select();
+  if(sce){showToast('Save failed: '+sce.message,'red');console.error(sce);return;}
+  DB.shipCosts.push(scd[0]);
   renderScTable();renderCostSummary();
   ['sc-so','sc-notes','sc-cost','sc-rec'].forEach(id=>document.getElementById(id).value='');document.getElementById('sc-carrier').value='';document.getElementById('sc-date').value=today();showToast('Shipment logged.','green');
 }
@@ -793,7 +841,10 @@ function addDamagedProduct(){
   const who=document.getElementById('dp-who').value,product=document.getElementById('dp-product').value.trim();
   const qty=parseInt(document.getElementById('dp-qty').value)||1,cost=parseFloat(document.getElementById('dp-cost').value)||0;
   if(!who||!product){showToast('Reporter and Product required.');return;}
-  DB.damaged.push({id:Date.now(),date:document.getElementById('dp-date').value,who,product,qty,cost,total:qty*cost,notes:document.getElementById('dp-notes').value});
+  const dpRow={date:document.getElementById('dp-date').value,who,product,qty,cost,total:qty*cost,notes:document.getElementById('dp-notes').value};
+  const {data:dpd,error:dpe}=await sb.from('wh_damaged').insert([dpRow]).select();
+  if(dpe){showToast('Save failed: '+dpe.message,'red');console.error(dpe);return;}
+  DB.damaged.push(dpd[0]);
   renderDpTable();renderDpSummary();
   ['dp-product','dp-notes','dp-qty','dp-cost'].forEach(id=>document.getElementById(id).value='');document.getElementById('dp-who').value='';document.getElementById('dp-date').value=today();showToast('Damage logged.','green');
 }
@@ -813,11 +864,14 @@ function renderDpSummary(){
 function addSysShip(){
   const so=document.getElementById('ss-so').value.trim(),loc=document.getElementById('ss-location').value;
   if(!so||!loc){showToast('SO Number and Location required.');return;}
-  DB.sysShip.push({id:Date.now(),date:document.getElementById('ss-date').value,so,location:loc,notes:document.getElementById('ss-notes').value,status:'Pending'});
+  const ssRow={date:document.getElementById('ss-date').value,so,location:loc,notes:document.getElementById('ss-notes').value,status:'Pending'};
+  const {data:ssd,error:sse}=await sb.from('wh_sys_ship').insert([ssRow]).select();
+  if(sse){showToast('Save failed: '+sse.message,'red');console.error(sse);return;}
+  DB.sysShip.push(ssd[0]);
   renderSsTable();renderSsSummary();
   ['ss-so','ss-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('ss-location').value='';document.getElementById('ss-date').value=today();showToast('Shipment flagged.','green');
 }
-function markSsResolved(id){const e=DB.sysShip.find(x=>x.id===id);if(e){e.status='Resolved';renderSsTable();renderSsSummary();if(mgrUnlocked)renderMgrSection('sys-ship');showToast('Marked resolved.','green');}}
+async function markSsResolved(id){const e=DB.sysShip.find(x=>x.id===id);if(e){e.status='Resolved';await sb.from('wh_sys_ship').update({status:'Resolved'}).eq('id',id);renderSsTable();renderSsSummary();if(mgrUnlocked)renderMgrSection('sys-ship');showToast('Marked resolved.','green');}}
 function renderSsTable(){
   const b=document.getElementById('ss-body');
   if(!DB.sysShip.length){b.innerHTML='<tr><td colspan="5" class="empty">No flagged shipments.</td></tr>';return;}
@@ -873,7 +927,9 @@ function askMgrDelete(id,section){mgrDeleteConfirmId=id;mgrDeleteSection=section
 function cancelMgrDelete(){mgrDeleteConfirmId=null;mgrDeleteSection=null;renderMgrSection(mgrActiveSection);}
 function confirmMgrDelete(id,section){
   const dbMap={activity:'log','pick-err':'pickErrors','ship-err':'shipErrors','ship-cost':'shipCosts','damaged':'damaged','sys-ship':'sysShip'};
+  const tblMap={activity:'wh_log','pick-err':'wh_pick_errors','ship-err':'wh_ship_errors','ship-cost':'wh_ship_costs','damaged':'wh_damaged','sys-ship':'wh_sys_ship'};
   const arr=DB[dbMap[section]];const i=arr.findIndex(x=>x.id===id);if(i>-1)arr.splice(i,1);
+  sb.from(tblMap[section]).delete().eq('id',id).then(({error})=>{if(error)console.error('delete:',error);});
   mgrDeleteConfirmId=null;mgrDeleteSection=null;renderMgrSection(section);
   if(section==='activity'){renderLogTable();renderOpenEntries();renderTodaySummary();}
   else if(section==='pick-err'){renderPeTable();renderPickerStats();}
@@ -984,7 +1040,7 @@ function openMgrEdit(id,section){
   document.getElementById('edit-wrap').style.display='block';
 }
 
-function saveMgrEdit(){
+async function saveMgrEdit(){
   const section=mgrEditSection,id=mgrEditId;
   if(section==='activity'){
     const e=DB.log.find(x=>x.id===id);if(!e)return;
@@ -992,12 +1048,14 @@ function saveMgrEdit(){
     if(!emps.length){showToast('Select at least one employee.');return;}
     e.date=document.getElementById('me-date').value;e.emps=emps;e.type=document.getElementById('me-type').value;
     e.sono=document.getElementById('me-sono').value||'—';e.start=document.getElementById('me-start').value;e.end=document.getElementById('me-end').value;e.notes=document.getElementById('me-notes').value;e.status=e.end?'Complete':'Open';
+    sb.from('wh_log').update({date:e.date,emps,type:e.type,sono:e.sono,start:e.start||null,end:e.end||null,notes:e.notes,status:e.status}).eq('id',id).then(({error})=>{if(error)console.error('edit log:',error);});
     renderLogTable();renderOpenEntries();renderTodaySummary();
   } else if(section==='pick-err'){
     const e=DB.pickErrors.find(x=>x.id===id);if(!e)return;
     e.date=document.getElementById('me-date').value;
     const oldSo=e.so;e.so=document.getElementById('me-so').value;e.type=document.getElementById('me-errtype').value;e.notes=document.getElementById('me-notes').value;
     if(e.so!==oldSo){const m=DB.log.filter(l=>l.type==='Picking'&&l.sono===e.so);const ps=new Set();m.forEach(x=>x.emps.forEach(emp=>ps.add(emp)));e.pickers=[...ps];}
+    sb.from('wh_pick_errors').update({date:e.date,so:e.so,type:e.type,notes:e.notes,pickers:e.pickers}).eq('id',id).then(({error})=>{if(error)console.error('edit pe:',error);});
     renderPeTable();renderPickerStats();
   } else if(section==='ship-err'){
     const e=DB.shipErrors.find(x=>x.id===id);if(!e)return;
@@ -1124,5 +1182,5 @@ document.querySelectorAll('.tab').forEach(tab=>{
   });
 });
 
-initDates();populateDropdowns();
+initDates();populateDropdowns();loadAllData();
 </script>
