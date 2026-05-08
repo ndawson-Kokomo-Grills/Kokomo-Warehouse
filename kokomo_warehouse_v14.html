@@ -450,7 +450,7 @@ tr:hover td{background:#ffffff05}
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 // ── Supabase ──────────────────────────────────────────────────
 const SUPABASE_URL = 'https://cusdgbutarctttkhyrvr.supabase.co';
@@ -1182,5 +1182,6 @@ document.querySelectorAll('.tab').forEach(tab=>{
   });
 });
 
-initDates();populateDropdowns();loadAllData();
+initDates();populateDropdowns();
+if(typeof supabase !== 'undefined'){loadAllData();}else{showToast('Offline mode — data will not sync.','red');}
 </script>
