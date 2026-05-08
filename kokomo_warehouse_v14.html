@@ -570,12 +570,15 @@ function renderManageList(){
 }
 function askManageRemove(i){manageConfirmIdx=i;renderManageList();}
 function cancelManageRemove(){manageConfirmIdx=null;renderManageList();}
-function doManageRemove(i){const arr=manageMode==='employee'?EMPLOYEES:CARRIERS;arr.splice(i,1);manageConfirmIdx=null;populateDropdowns();renderManageList();}
+async function doManageRemove(i){const arr=manageMode==='employee'?EMPLOYEES:CARRIERS;const name=arr[i];arr.splice(i,1);manageConfirmIdx=null;const tbl=manageMode==='employee'?'wh_employees':'wh_carriers';sb.from(tbl).delete().eq('name',name).then(({error})=>{if(error)console.error('remove '+manageMode+':',error);});populateDropdowns();renderManageList();}
 function doManageAdd(){
   const val=document.getElementById('manage-input').value.trim();if(!val)return;
   const arr=manageMode==='employee'?EMPLOYEES:CARRIERS;
   if(arr.map(x=>x.toLowerCase()).includes(val.toLowerCase()))return;
-  arr.push(val);populateDropdowns();document.getElementById('manage-input').value='';renderManageList();showToast(val+' added.','green');
+  arr.push(val);
+  const tbl=manageMode==='employee'?'wh_employees':'wh_carriers';
+  sb.from(tbl).insert([{name:val}]).then(({error})=>{if(error)console.error('add '+manageMode+':',error);});
+  populateDropdowns();document.getElementById('manage-input').value='';renderManageList();showToast(val+' added.','green');
 }
 function closeManage(){document.getElementById('manage-modal').style.display='none';manageConfirmIdx=null;}
 
@@ -635,6 +638,14 @@ async function loadAllData(){
     DB.shipCosts=(sc.data||[]).map(r=>({...r,cost:r.cost||0,rec:r.rec||0}));
     DB.damaged=dp.data||[];
     DB.sysShip=ss.data||[];
+    // Load employees and carriers
+    const [emps,cars]=await Promise.all([
+      sb.from('wh_employees').select('*').order('id',{ascending:true}),
+      sb.from('wh_carriers').select('*').order('id',{ascending:true}),
+    ]);
+    if(emps.data&&emps.data.length)EMPLOYEES=emps.data.map(r=>r.name);
+    if(cars.data&&cars.data.length)CARRIERS=cars.data.map(r=>r.name);
+    populateDropdowns();
     renderLogTable();renderOpenEntries();renderTodaySummary();
     renderPeTable();renderPickerStats();
     renderSeTable();renderDamageSummary();
@@ -1208,4 +1219,3 @@ document.querySelectorAll('.tab').forEach(tab=>{
 initDates();populateDropdowns();
 if(typeof supabase !== 'undefined'){loadAllData();}else{showToast('Offline mode — data will not sync.','red');}
 </script>
-
