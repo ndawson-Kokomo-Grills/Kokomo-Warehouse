@@ -162,7 +162,7 @@ tr:hover td{background:#ffffff05}
         <div class="selected-emps" id="log-emp-chips"></div>
       </div>
       <div class="fg"><label>Activity Type</label>
-        <select id="log-type" onchange="checkActType()"><option value="">— Select —</option><option>Picking</option><option>Packing</option><option>Shipping</option><option>Receiving</option></select>
+        <select id="log-type" onchange="checkActType()"><option value="">— Select —</option><option>Picking</option><option>Packing</option><option>Shipping</option><option>Receiving</option><option>Cleaning / Organizing</option></select>
       </div>
       <div class="fg" id="sono-group" style="display:none"><label id="sono-lbl">SO Number</label><input type="text" id="log-sono" placeholder="e.g. SO-1042"></div>
       <div class="g2" style="gap:10px">
@@ -251,7 +251,8 @@ tr:hover td{background:#ffffff05}
       <div class="fg"><label>Carrier</label>
         <div class="flex g8"><select id="sc-carrier" style="flex:1"><option value="">— Select —</option></select>
         <button class="btn btn-ghost btn-sm" onclick="openManage('carrier')">Manage</button></div></div>
-      <div class="fg"><label>Shipping Cost ($)</label><input type="number" id="sc-cost" placeholder="0.00" step="0.01"></div>
+      <div class="fg"><label>Quote ($)</label><input type="number" id="sc-quote" placeholder="0.00" step="0.01"></div>
+      <div class="fg"><label>Actual Cost ($)</label><input type="number" id="sc-cost" placeholder="Leave blank if unknown" step="0.01"></div>
       <div class="fg"><label>Shipping Recovery ($)</label><input type="number" id="sc-rec" placeholder="0.00" step="0.01"></div>
       <div class="fg"><label>Notes</label><textarea id="sc-notes" rows="2" style="resize:vertical"></textarea></div>
       <button class="btn btn-p" style="width:100%" onclick="addShipCost()">Log Shipment</button>
@@ -850,17 +851,50 @@ function renderDamageSummary(){
 // ── Ship Cost ─────────────────────────────────────────────────
 async function addShipCost(){
   const so=document.getElementById('sc-so').value.trim();if(!so){showToast('SO Number required.');return;}
-  const scRow={date:document.getElementById('sc-date').value,so,carrier:document.getElementById('sc-carrier').value,cost:parseFloat(document.getElementById('sc-cost').value)||0,rec:parseFloat(document.getElementById('sc-rec').value)||0,notes:document.getElementById('sc-notes').value};
+  const scRow={date:document.getElementById('sc-date').value,so,carrier:document.getElementById('sc-carrier').value,quote:parseFloat(document.getElementById('sc-quote').value)||0,cost:parseFloat(document.getElementById('sc-cost').value)||null,rec:parseFloat(document.getElementById('sc-rec').value)||0,notes:document.getElementById('sc-notes').value,status:document.getElementById('sc-cost').value?'Final':'Quoted'};
   const {data:scd,error:sce}=await sb.from('wh_ship_costs').insert([scRow]).select();
   if(sce){showToast('Save failed: '+sce.message,'red');console.error(sce);return;}
   DB.shipCosts.push(scd[0]);
   renderScTable();renderCostSummary();
-  ['sc-so','sc-notes','sc-cost','sc-rec'].forEach(id=>document.getElementById(id).value='');document.getElementById('sc-carrier').value='';document.getElementById('sc-date').value=today();showToast('Shipment logged.','green');
+  ['sc-so','sc-notes','sc-quote','sc-cost','sc-rec'].forEach(id=>document.getElementById(id).value='');document.getElementById('sc-carrier').value='';document.getElementById('sc-date').value=today();showToast('Shipment logged.','green');
 }
 function renderScTable(){
   const b=document.getElementById('sc-body');
   if(!DB.shipCosts.length){b.innerHTML='<tr><td colspan="7" class="empty">No shipments logged.</td></tr>';return;}
-  b.innerHTML=DB.shipCosts.slice().reverse().map(e=>{const net=e.rec-e.cost;return`<tr><td>${e.date}</td><td><span class="tag">${e.so}</span></td><td>${e.carrier||'—'}</td><td style="color:var(--red)">${fmt$(e.cost)}</td><td style="color:var(--green)">${fmt$(e.rec)}</td><td style="color:${net>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt$(net)}</td><td>${e.notes||'—'}</td></tr>`;}).join('');
+  b.innerHTML=DB.shipCosts.slice().reverse().map(e=>{const actual=e.cost!=null?fmt$(e.cost):'<span style="color:var(--amber,#f59e0b)">Pending</span>';const net=e.cost!=null?(e.rec-(e.cost)):null;const netStr=net!=null?`<span style="color:${net>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt$(net)}</span>`:'—';const badge=e.status==='Quoted'?'<span class="tag" style="background:var(--amber,#f59e0b);color:#000">Quoted</span>':'<span class="tag tag-complete">Final</span>';return`<tr><td>${e.date}</td><td><span class="tag">${e.so}</span></td><td>${e.carrier||'—'}</td><td style="color:var(--accent)">${fmt$(e.quote||0)}</td><td>${actual}</td><td style="color:var(--green)">${fmt$(e.rec)}</td><td>${netStr}</td><td>${badge}</td><td>${e.notes||'—'}</td><td><button class="btn btn-ghost btn-sm" onclick="openScUpdate(${e.id})">Update</button></td></tr>`;}).join('');
+}
+function openScUpdate(id){
+  const e=DB.shipCosts.find(x=>x.id===id);if(!e)return;
+  const existing=document.getElementById('sc-update-panel');if(existing)existing.remove();
+  const div=document.createElement('div');
+  div.id='sc-update-panel';
+  div.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  div.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.5rem;width:360px;max-width:90vw;">
+    <div style="font-weight:700;font-size:15px;margin-bottom:1rem;color:var(--text)">Update Shipment — ${e.so}</div>
+    <div style="margin-bottom:.75rem"><label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">ACTUAL COST ($)</label>
+    <input type="number" id="scu-cost" step="0.01" value="${e.cost||''}" placeholder="Enter actual cost" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:14px;box-sizing:border-box"></div>
+    <div style="margin-bottom:.75rem"><label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">SHIPPING RECOVERY ($)</label>
+    <input type="number" id="scu-rec" step="0.01" value="${e.rec||''}" placeholder="0.00" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:14px;box-sizing:border-box"></div>
+    <div style="margin-bottom:1rem"><label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">NOTES</label>
+    <textarea id="scu-notes" rows="2" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:14px;box-sizing:border-box;resize:vertical">${e.notes||''}</textarea></div>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="confirmScUpdate(${id})" style="flex:1;background:var(--accent);color:#000;border:none;border-radius:6px;padding:10px;font-weight:700;cursor:pointer">Save</button>
+      <button onclick="document.getElementById('sc-update-panel').remove()" style="flex:1;background:var(--surface2,#333);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;cursor:pointer">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(div);
+}
+async function confirmScUpdate(id){
+  const e=DB.shipCosts.find(x=>x.id===id);if(!e)return;
+  const cost=parseFloat(document.getElementById('scu-cost').value);
+  e.cost=isNaN(cost)?null:cost;
+  e.rec=parseFloat(document.getElementById('scu-rec').value)||0;
+  e.notes=document.getElementById('scu-notes').value;
+  e.status=e.cost!=null?'Final':'Quoted';
+  const {error}=await sb.from('wh_ship_costs').update({cost:e.cost,rec:e.rec,notes:e.notes,status:e.status}).eq('id',id);
+  if(error){showToast('Save failed: '+error.message,'red');console.error(error);return;}
+  document.getElementById('sc-update-panel').remove();
+  renderScTable();renderCostSummary();showToast('Shipment updated.','green');
 }
 function renderCostSummary(){
   const el=document.getElementById('cost-summary');
